@@ -77,16 +77,27 @@ class UniRAGTrainer:
             # 区域编码器
             self.encoder = RegionAwareEncoder(
                 model_name=self.config.get('encoder_model_path', './layoutlmv3-base')
-            ).to(self.device)
+            )
             
+            # ===================== 新增：启用多 GPU 训练 =====================
+            # 检查是否有多个可用的 GPU
+            if torch.cuda.device_count() > 1:
+                logger.info(f"✅ 检测到 {torch.cuda.device_count()} 个 GPU，将使用 DataParallel 模式。")
+                # 使用 DataParallel 包装模型
+                self.encoder = nn.DataParallel(self.encoder)
+            
+            # 将模型（或包装后的模型）移动到设备上
+            self.encoder.to(self.device)
+            # ===================== 修改结束 =====================
+
             # 区域预训练器
             self.region_trainer = RegionPreTrainer(
                 encoder=self.encoder,
                 learning_rate=self.config.get('region_lr', 1e-5)
             )
             
-            # 确保编码器在正确设备上
-            self.region_trainer.encoder = self.region_trainer.encoder.to(self.device)
+            # 确保编码器在正确设备上 (DataParallel 会自动处理，但这行无害)
+            # self.region_trainer.encoder = self.region_trainer.encoder.to(self.device)
             
             # 一致性判别器
             self.consistency_judge = ConsistencyJudge(
@@ -163,83 +174,56 @@ class UniRAGTrainer:
             
             # 训练循环
             for batch_idx, batch_data in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}")):
-                    try:
-                        # 适配OpenDocVQADataset的输出格式
-                        if isinstance(batch_data, dict) and 'input_ids' in batch_data:
-                            # 获取批次大小
-                            batch_size = batch_data['input_ids'].size(0)
-                            
-                            for sample_idx in range(batch_size):
-                                # 提取单个样本，确保设备一致和维度正确
-                                input_length = batch_data['input_ids'].size(1)
-                                
-                                # 处理question和answer字段
-                                question = batch_data.get('question', [''])[sample_idx] if isinstance(batch_data.get('question'), list) else batch_data.get('question', '')
-                                answer = batch_data.get('answer', [''])[sample_idx] if isinstance(batch_data.get('answer'), list) else batch_data.get('answer', '')
-                                
-                                # 合并问题和答案作为文本内容
-                                text_content = f"问题: {question} 答案: {answer}"
-                                
-                                # 确保bbox维度正确
-                                bbox = batch_data['bbox'][sample_idx:sample_idx+1].to(self.device)
-                                if bbox.dim() == 3:  # [1, seq_len, 4]
-                                    bbox = bbox.squeeze(0)  # [seq_len, 4]
-                                
-                                # 记录原始bbox信息
-                                original_min = torch.min(bbox).item()
-                                original_max = torch.max(bbox).item()
-                                
-                                # 确保bbox坐标在0-1000范围内，并处理可能的异常值
-                                bbox = torch.clamp(bbox, 0, 1000)
-                                
-                                # 记录处理后的bbox信息
-                                processed_min = torch.min(bbox).item()
-                                processed_max = torch.max(bbox).item()
-                                
-                                # 如果坐标被截断，记录警告
-                                if original_min < 0 or original_max > 1000:
-                                    logger.warning(f"⚠️ 样本 {sample_idx} bbox坐标被截断: {original_min}-{original_max} -> {processed_min}-{processed_max}")
-                                
-                                # 额外的安全检查：如果bbox全为0，使用默认值
-                                if torch.all(bbox == 0):
-                                    logger.warning(f"⚠️ 样本 {sample_idx} bbox全为0，使用默认值")
-                                    bbox = torch.tensor([[0, 0, 100, 100]] * bbox.size(0), 
-                                                       dtype=bbox.dtype, device=bbox.device)
-                                
-                                sample = {
-                                    'input_ids': batch_data['input_ids'][sample_idx:sample_idx+1].to(self.device),
-                                    'attention_mask': batch_data['attention_mask'][sample_idx:sample_idx+1].to(self.device),
-                                    'bbox': bbox,
-                                    'region_masks': torch.ones(1, input_length, device=self.device).float(),
-                                    'region_labels': torch.ones(1, input_length, device=self.device).long(),
-                                    'text': text_content
-                                }
-                                
-                                # 区域重构训练
-                                reconstruction_loss = self.region_trainer.train_reconstruction(sample)
-                                epoch_losses['reconstruction_loss'] += reconstruction_loss['reconstruction_loss']
-                                
-                                # 区域分类训练
-                                classification_loss = self.region_trainer.train_classification(sample)
-                                epoch_losses['classification_loss'] += classification_loss['classification_loss']
-                                
-                                # 区域对齐训练
-                                alignment_loss = self.region_trainer.train_alignment(sample)
-                                epoch_losses['alignment_loss'] += alignment_loss['alignment_loss']
-                        
-                        else:
-                            # 其他格式：直接处理
-                            logger.warning(f"⚠️ 未知的batch_data格式，跳过批次 {batch_idx}")
-                            continue
+                try:
+                    # ===================== 新增：将整个批次的数据移动到 GPU =====================
+                    # 这是一个更高效、更标准的做法
                     
-                    except Exception as e:
-                        logger.warning(f"⚠️ 批次 {batch_idx} 训练失败: {e}")
-                        continue
+                    # 确保所有张量都在正确的设备上
+                    input_ids = batch_data['input_ids'].to(self.device)
+                    attention_mask = batch_data['attention_mask'].to(self.device)
+                    bbox = batch_data['bbox'].to(self.device)
+                    # 关键：不要忘记移动图像张量！
+                    image_pixels = batch_data['image'].to(self.device) 
+                    
+                    # 假设的 region_masks 和 region_labels，也需要移动到 device
+                    batch_size, seq_len = input_ids.shape
+                    region_masks = torch.ones(batch_size, seq_len, device=self.device).float()
+                    region_labels = torch.ones(batch_size, seq_len, device=self.device).long()
+                    
+                    # 将所有数据打包成一个字典
+                    gpu_batch = {
+                        'input_ids': input_ids,
+                        'attention_mask': attention_mask,
+                        'bbox': bbox,
+                        'pixel_values': image_pixels, # 注意：encoder的forward需要pixel_values
+                        'region_masks': region_masks,
+                        'region_labels': region_labels
+                    }
+                    # ===================== 修改结束 =====================
+
+                    # 区域重构训练
+                    reconstruction_loss = self.region_trainer.train_reconstruction(gpu_batch)
+                    epoch_losses['reconstruction_loss'] += reconstruction_loss.get('reconstruction_loss', 0.0)
+                    
+                    # 区域分类训练
+                    classification_loss = self.region_trainer.train_classification(gpu_batch)
+                    epoch_losses['classification_loss'] += classification_loss.get('classification_loss', 0.0)
+                    
+                    # 区域对齐训练
+                    alignment_loss = self.region_trainer.train_alignment(gpu_batch)
+                    epoch_losses['alignment_loss'] += alignment_loss.get('alignment_loss', 0.0)
+
+                except Exception as e:
+                    logger.warning(f"⚠️ 批次 {batch_idx} 训练失败: {e}")
+                    import traceback
+                    traceback.print_exc() # 打印详细的错误堆栈
+                    continue
             
             # 计算平均损失
-            num_batches = len(train_loader)
+            # 注意：因为现在是按批次累加损失，所以除数应该是批次数量 * 批次大小
+            num_samples = len(train_loader.dataset)
             for key in epoch_losses:
-                epoch_losses[key] /= num_batches
+                epoch_losses[key] /= num_samples
                 history[key].append(epoch_losses[key])
             
             # 记录训练进度
