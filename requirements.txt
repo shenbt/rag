@@ -1,0 +1,11 @@
+torch
+torchvision
+transformers
+numpy
+tqdm
+PyYAML
+Pillow
+sentence-transformers
+# The following are for expert tools, install them if you need full functionality
+# paddleocr
+# ppstructure

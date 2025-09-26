@@ -1,0 +1,22 @@
+# 配置文件：所有超参数、路径设置
+data:
+  path: "./data/opendocvqa"  # 数据集路径
+  train_split: "train.json"
+  eval_split: "eval.json"
+  image_size: 224  # 图像尺寸
+
+train:
+  batch_size: 16
+  lr: 5e-5
+  epochs: 5
+  weight_decay: 1e-2
+  max_grad_norm: 1.0
+
+model:
+  hidden_dim: 768
+  encoder_model: "microsoft/layoutlmv3-base"
+  dropout: 0.1
+  # 本地模型路径
+  dense_model: "./all-MiniLM-L6-v2"
+  cross_encoder: "./ms-marco-MiniLM-L-6-v2"
+  backup_dense_model: "./paraphrase-MiniLM-L3-v2"

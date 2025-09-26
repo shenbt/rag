@@ -1,0 +1,86 @@
+{
+  "training_history": [
+    [
+      "region_encoder",
+      {
+        "reconstruction_loss": [
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1
+        ],
+        "classification_loss": [
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1
+        ],
+        "alignment_loss": [
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1
+        ]
+      }
+    ],
+    [
+      "consistency_judge",
+      {
+        "consistency_score": []
+      }
+    ],
+    [
+      "retriever",
+      {
+        "retrieval_accuracy": []
+      }
+    ],
+    [
+      "full_pipeline",
+      {
+        "pipeline_accuracy": [],
+        "consistency_score": [],
+        "response_time": []
+      }
+    ]
+  ],
+  "final_metrics": {
+    "retrieval_accuracy": 0.0,
+    "consistency_score": 0.8,
+    "pipeline_accuracy": 1.0,
+    "avg_response_time": 0.0
+  },
+  "config": {
+    "data": {
+      "path": "./data/opendocvqa",
+      "train_split": "train.json",
+      "eval_split": "eval.json",
+      "image_size": 224
+    },
+    "train": {
+      "batch_size": 16,
+      "lr": "5e-5",
+      "epochs": 5,
+      "weight_decay": "1e-2",
+      "max_grad_norm": 1.0
+    },
+    "model": {
+      "hidden_dim": 768,
+      "encoder_model": "microsoft/layoutlmv3-base",
+      "dropout": 0.1
+    },
+    "task": "all",
+    "epochs": 5,
+    "batch_size": 16,
+    "checkpoint_dir": "./checkpoints",
+    "resume": null,
+    "use_haystack": true,
+    "consistency_threshold": 0.6,
+    "encoder_model_path": "./layoutlmv3-base",
+    "generator_model_path": "./gpt2"
+  },
+  "timestamp": "2025-08-31T11:33:49.299353"
+}
